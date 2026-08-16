@@ -1,13 +1,10 @@
 name: ChatGPT Windows Build
 
 on:
-  push:
-    branches:
-      - chatgpt/windows-build-20260816
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-windows:
@@ -44,6 +41,18 @@ jobs:
           git lfs version
           svn --version --quiet
           make --version
+          gh --version
+
+      - name: Validate release version
+        shell: powershell
+        run: |
+          $version = (Get-Content VERSION -Raw).Trim()
+          if ($version -ne '3.3.3') {
+            throw "Expected VERSION=3.3.3, found '$version'"
+          }
+          "RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "RELEASE_TAG=v$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "RELEASE_ARCHIVE=mixar-$version-windows-x64.zip" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Initialize Blender upstream and dependencies
         shell: cmd
@@ -62,12 +71,49 @@ jobs:
           if (-not $exe) { throw 'mixar.exe was not produced' }
           Write-Host "Built executable: $($exe.FullName)"
 
-      - name: Upload compiled Mixar
+      - name: Package Mixar release
+        if: success()
+        shell: powershell
+        run: |
+          if (Test-Path $env:RELEASE_ARCHIVE) {
+            Remove-Item $env:RELEASE_ARCHIVE -Force
+          }
+          Compress-Archive -Path 'build\Prod\bin\*' -DestinationPath $env:RELEASE_ARCHIVE -CompressionLevel Optimal
+          $archive = Get-Item $env:RELEASE_ARCHIVE
+          Write-Host "Release package: $($archive.Name) ($($archive.Length) bytes)"
+
+      - name: Upload compiled Mixar artifact
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: mixar-windows-x64-prod
-          path: build/Prod/bin/
+          name: mixar-${{ env.RELEASE_VERSION }}-windows-x64
+          path: ${{ env.RELEASE_ARCHIVE }}
           if-no-files-found: error
-          compression-level: 6
-          retention-days: 7
+          compression-level: 0
+          retention-days: 30
+
+      - name: Deploy GitHub Release
+        if: success()
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $repo = '${{ github.repository }}'
+          $tag = $env:RELEASE_TAG
+          $archive = $env:RELEASE_ARCHIVE
+
+          gh release view $tag --repo $repo *> $null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Release $tag already exists; replacing Windows asset."
+            gh release upload $tag $archive --clobber --repo $repo
+            if ($LASTEXITCODE -ne 0) { throw "Failed to upload asset to release $tag" }
+          }
+          else {
+            Write-Host "Creating release $tag."
+            gh release create $tag $archive `
+              --repo $repo `
+              --target '${{ github.sha }}' `
+              --title "Mixar $env:RELEASE_VERSION" `
+              --notes "Mixar $env:RELEASE_VERSION Windows x64 production build. Built and deployed automatically by GitHub Actions."
+            if ($LASTEXITCODE -ne 0) { throw "Failed to create release $tag" }
+          }
