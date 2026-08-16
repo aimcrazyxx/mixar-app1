@@ -1,0 +1,73 @@
+name: ChatGPT Windows Build
+
+on:
+  push:
+    branches:
+      - chatgpt/windows-build-20260816
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-2022
+    timeout-minutes: 360
+    env:
+      MIXAR_ENV: Prod
+      BUILD_CORES: 2
+      ROBOCOPY_THREADS: 16
+
+    steps:
+      - name: Checkout Mixar source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+
+      - name: Install build helper tools
+        shell: powershell
+        run: |
+          git lfs install
+          if (-not (Get-Command make -ErrorAction SilentlyContinue)) {
+            choco install make -y --no-progress
+          }
+          if (-not (Get-Command svn -ErrorAction SilentlyContinue)) {
+            choco install subversion -y --no-progress
+          }
+          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) {
+            choco install ninja -y --no-progress
+          }
+          cmake --version
+          ninja --version
+          git lfs version
+          svn --version --quiet
+          make --version
+
+      - name: Initialize Blender upstream and dependencies
+        shell: cmd
+        run: call scripts\windows\init.bat
+
+      - name: Build Mixar Windows x64 (Prod)
+        shell: cmd
+        run: call scripts\windows\build_ninja.bat
+
+      - name: Show build output
+        if: success()
+        shell: powershell
+        run: |
+          Get-ChildItem -Path build\Prod\bin -Force | Select-Object Name, Length, LastWriteTime
+          $exe = Get-ChildItem -Path build\Prod\bin -Recurse -Filter mixar.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $exe) { throw 'mixar.exe was not produced' }
+          Write-Host "Built executable: $($exe.FullName)"
+
+      - name: Upload compiled Mixar
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mixar-windows-x64-prod
+          path: build/Prod/bin/
+          if-no-files-found: error
+          compression-level: 6
+          retention-days: 7
