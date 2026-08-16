@@ -1,6 +1,9 @@
 name: ChatGPT Windows Build
 
 on:
+  push:
+    branches:
+      - chatgpt/windows-build-20260816
   workflow_dispatch:
 
 permissions:
